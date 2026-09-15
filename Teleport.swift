@@ -2,18 +2,13 @@ import AppKit
 import ApplicationServices
 import Carbon.HIToolbox
 
-private let appVersion = "1.3.6"
+private let appVersion = "1.4.0"
 private let displayName = "LC49G95T"
 private let macInput = 1
 private let linuxInput = 16
 private let preferenceKey = "UbuntuShortcutsEnabled"
 private let injectedEventMarker: Int64 = 0x54454C45504F5254
 private let app = NSApplication.shared
-
-private let betterDisplayCLICandidates = [
-    "/opt/homebrew/bin/betterdisplaycli",
-    "/usr/local/bin/betterdisplaycli"
-]
 
 private let configurationDirectory = FileManager.default.homeDirectoryForCurrentUser
     .appendingPathComponent("Library/Application Support/Teleport", isDirectory: true)
@@ -83,10 +78,6 @@ private var configurationModificationDate: Date?
 private var configurationStatus = "Default configuration"
 private var frontmostBundleID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
 
-private var betterDisplayCLI: String? {
-    betterDisplayCLICandidates.first { FileManager.default.isExecutableFile(atPath: $0) }
-}
-
 private func log(_ message: String) {
     fputs("\(Date()): \(message)\n", stderr)
     fflush(stderr)
@@ -111,17 +102,14 @@ private func run(_ executable: String, _ arguments: [String]) {
 }
 
 private func switchInput(to value: Int) {
-    guard let betterDisplayCLI else {
-        log("BetterDisplay CLI was not found")
-        return
+    DispatchQueue.global(qos: .userInitiated).async {
+        do {
+            try DirectDDC.setInput(displayName: displayName, value: value)
+            log("Direct DDC switched \(displayName) to input \(value)")
+        } catch {
+            log("Direct DDC failed: \(error)")
+        }
     }
-
-    run(betterDisplayCLI, [
-        "set",
-        "-namelike=\(displayName)",
-        "-ddc=\(value)",
-        "-vcp=inputSelect"
-    ])
 }
 
 private func defaultConfiguration() -> ShortcutConfiguration {
@@ -592,6 +580,11 @@ private func installEventTap() {
 
 private func runSelfTest() -> Int32 {
     do {
+        guard DirectDDC.inputPacket(value: 16) == [0x84, 0x03, 0x60, 0x00, 0x10, 0xc8] else {
+            throw ConfigurationError.invalidChord("direct DDC packet")
+        }
+        print("PASS direct DDC input packet")
+
         guard sourceFlags(
             keyCode: CGKeyCode(kVK_F13),
             eventFlags: [.maskSecondaryFn]
@@ -776,6 +769,18 @@ if CommandLine.arguments.contains("--version") {
     print("Teleport \(appVersion)")
     exit(0)
 }
+if let option = CommandLine.arguments.firstIndex(of: "--set-input"),
+   CommandLine.arguments.indices.contains(option + 1),
+   let value = Int(CommandLine.arguments[option + 1]) {
+    do {
+        try DirectDDC.setInput(displayName: displayName, value: value)
+        print("Direct DDC switched \(displayName) to input \(value)")
+        exit(0)
+    } catch {
+        fputs("Direct DDC failed: \(error)\n", stderr)
+        exit(1)
+    }
+}
 if CommandLine.arguments.contains("--self-test") {
     exit(runSelfTest())
 }
@@ -805,11 +810,6 @@ Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in
     }
     menuController.refresh()
 }
-
-NSWorkspace.shared.openApplication(
-    at: URL(fileURLWithPath: "/Applications/BetterDisplay.app"),
-    configuration: NSWorkspace.OpenConfiguration()
-)
 
 log("Menu-bar helper started; Ubuntu shortcuts are \(ubuntuShortcutsEnabled ? "on" : "off")")
 app.setActivationPolicy(.accessory)

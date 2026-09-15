@@ -5,6 +5,9 @@
 Switch a monitor, keyboard, and mouse between macOS and Ubuntu with one shortcut.
 It also adds an optional Ubuntu-style keyboard layer to macOS.
 
+Teleport sends DDC/CI input commands directly over the monitor cable. It does
+not require BetterDisplay or another display-control helper.
+
 This build is configured for:
 
 - Samsung Odyssey G9 LC49G95T
@@ -14,10 +17,9 @@ This build is configured for:
 
 ## Install
 
-Install BetterDisplay and Deskflow first:
+Install Deskflow first:
 
 ```bash
-brew install --cask betterdisplay
 brew install deskflow
 brew install --cask ghostty
 ```
@@ -108,7 +110,7 @@ If an edit is invalid, Teleport keeps the last valid configuration and reports
 Command Line Tools for Xcode are required.
 
 ```bash
-./scripts/build-release.sh 1.3.6
+./scripts/build-release.sh 1.4.0
 ./dist/Teleport.app/Contents/MacOS/Teleport --self-test
 ```
 
@@ -125,6 +127,10 @@ The original Samsung LC49G95T uses:
 
 Edit the constants at the top of `Teleport.swift` before building if
 your monitor or connections differ.
+
+Direct DDC currently requires Apple Silicon. The implementation is built into
+Teleport and is adapted from the MIT-licensed AppleSiliconDDC project. See
+`THIRD_PARTY_LICENSES.md` for attribution.
 
 ## Privacy
 

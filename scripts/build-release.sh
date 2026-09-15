@@ -3,7 +3,7 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "$0")" && pwd)"
 repo_dir="$(cd "$script_dir/.." && pwd)"
-version="${1:-1.3.6}"
+version="${1:-1.4.0}"
 dist_dir="$repo_dir/dist"
 app_dir="$dist_dir/Teleport.app"
 contents_dir="$app_dir/Contents"
@@ -20,14 +20,23 @@ rm -rf "$dist_dir"
 mkdir -p "$binary_dir" "$resources_dir"
 
 sdk_path="$(xcrun --sdk macosx --show-sdk-path)"
-frameworks=(-framework AppKit -framework ApplicationServices -framework Carbon)
+frameworks=(
+    -framework AppKit
+    -framework ApplicationServices
+    -framework Carbon
+    -framework CoreDisplay
+    -framework IOKit
+    -import-objc-header "$repo_dir/DirectDDC-Bridging-Header.h"
+)
+ln -s "$repo_dir/Teleport.swift" "$build_dir/main.swift"
+sources=("$build_dir/main.swift" "$repo_dir/DirectDDC.swift")
 
 swiftc -O -target arm64-apple-macosx13.0 -sdk "$sdk_path" \
-    "${frameworks[@]}" "$repo_dir/Teleport.swift" \
+    "${frameworks[@]}" "${sources[@]}" \
     -o "$build_dir/Teleport-arm64"
 
 swiftc -O -target x86_64-apple-macosx13.0 -sdk "$sdk_path" \
-    "${frameworks[@]}" "$repo_dir/Teleport.swift" \
+    "${frameworks[@]}" "${sources[@]}" \
     -o "$build_dir/Teleport-x86_64"
 
 lipo -create \
