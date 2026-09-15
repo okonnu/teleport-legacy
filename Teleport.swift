@@ -2,7 +2,7 @@ import AppKit
 import ApplicationServices
 import Carbon.HIToolbox
 
-private let appVersion = "1.3.2"
+private let appVersion = "1.3.6"
 private let displayName = "LC49G95T"
 private let macInput = 1
 private let linuxInput = 16
@@ -46,6 +46,7 @@ private struct ResolvedRule {
 
 private enum MacAction {
     case shortcut(String)
+    case shortcutSequence([String])
     case openApplication(String)
     case process(String, [String])
 }
@@ -126,6 +127,7 @@ private func switchInput(to value: Int) {
 private func defaultConfiguration() -> ShortcutConfiguration {
     let terminals = [
         "com.apple.Terminal",
+        "com.mitchellh.ghostty",
         "com.googlecode.iterm2",
         "dev.warp.Warp-Stable",
         "net.kovidgoyal.kitty",
@@ -154,8 +156,6 @@ private func defaultConfiguration() -> ShortcutConfiguration {
         action("ctrl+w", "closeWindow", scope: "nonTerminal"),
         action("ctrl+l", "focusLocation", scope: "nonTerminal"),
         action("ctrl+delete", "deleteNextWord", scope: "nonTerminal"),
-        action("alt+tab", "nextApplication"),
-        action("alt+shift+tab", "previousApplication"),
         action("alt+f4", "closeWindow"),
         action("alt+f2", "spotlight"),
         action("alt+left", "back"),
@@ -195,6 +195,8 @@ private let keyCodes: [String: CGKeyCode] = [
     "up": CGKeyCode(kVK_UpArrow), "down": CGKeyCode(kVK_DownArrow),
     "left_bracket": CGKeyCode(kVK_ANSI_LeftBracket),
     "right_bracket": CGKeyCode(kVK_ANSI_RightBracket),
+    "3": CGKeyCode(kVK_ANSI_3), "4": CGKeyCode(kVK_ANSI_4),
+    "5": CGKeyCode(kVK_ANSI_5),
     "f2": CGKeyCode(kVK_F2), "f3": CGKeyCode(kVK_F3), "f4": CGKeyCode(kVK_F4),
     "print_screen": CGKeyCode(kVK_F13)
 ]
@@ -229,12 +231,12 @@ private let macActions: [String: MacAction] = [
     "tileUp": .shortcut("fn+ctrl+up"),
     "tileDown": .shortcut("fn+ctrl+down"),
     "screenshotControls": .process("/usr/bin/open", ["-a", "Screenshot"]),
-    "captureArea": .process("/usr/sbin/screencapture", ["-i"]),
-    "captureWindow": .process("/usr/sbin/screencapture", ["-i", "-W"]),
-    "copyScreen": .process("/usr/sbin/screencapture", ["-c"]),
-    "copyArea": .process("/usr/sbin/screencapture", ["-i", "-c"]),
+    "captureArea": .shortcut("cmd+shift+4"),
+    "captureWindow": .shortcutSequence(["cmd+shift+4", "space"]),
+    "copyScreen": .shortcut("cmd+ctrl+shift+3"),
+    "copyArea": .shortcut("cmd+ctrl+shift+4"),
     "forceQuit": .shortcut("cmd+alt+escape"),
-    "openTerminal": .process("/usr/bin/open", ["-n", "-a", "Terminal"])
+    "openTerminal": .process("/usr/bin/open", ["-n", "-a", "Ghostty"])
 ]
 
 private func parseChord(_ value: String) throws -> ParsedChord {
@@ -298,6 +300,9 @@ private func resolveConfiguration(_ configuration: ShortcutConfiguration) throws
             }
             if let macAction = macActions[action], case .shortcut(let chord) = macAction {
                 target = try parseChord(chord)
+            }
+            if let macAction = macActions[action], case .shortcutSequence(let chords) = macAction {
+                for chord in chords { _ = try parseChord(chord) }
             }
         }
         result.append(ResolvedRule(definition: definition, source: source, target: target))
@@ -377,53 +382,103 @@ private func windowsKeyRule() -> ResolvedRule? {
     }
 }
 
-private func postShortcut(_ chord: ParsedChord) {
-    guard let keyCode = chord.keyCode else { return }
-    DispatchQueue.main.async {
-        guard
-            let keyDown = CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: true),
-            let keyUp = CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: false)
-        else { return }
-
-        for event in [keyDown, keyUp] {
-            event.flags = chord.modifiers
-            event.setIntegerValueField(.eventSourceUserData, value: injectedEventMarker)
-        }
-        keyDown.post(tap: .cghidEventTap)
-        keyUp.post(tap: .cghidEventTap)
-    }
+private func remappingPermissionAvailable() -> Bool {
+    AXIsProcessTrusted()
 }
 
-private func performAction(_ rule: ResolvedRule) {
-    guard let actionName = rule.definition.action else { return }
-    if actionName == "openApplication" {
-        if let name = rule.definition.argument { run("/usr/bin/open", ["-a", name]) }
-        return
+private func disableActiveRemapping() {
+    guard activeRemappingAvailable else { return }
+    activeRemappingAvailable = false
+    log("Remapping permission was revoked; passing keys through")
+    DispatchQueue.main.async { installEventTap() }
+}
+
+@discardableResult
+private func postShortcut(_ chord: ParsedChord) -> Bool {
+    guard remappingPermissionAvailable(), CGPreflightPostEventAccess(), let keyCode = chord.keyCode else {
+        disableActiveRemapping()
+        return false
     }
 
-    guard let action = macActions[actionName] else { return }
+    guard
+        let keyDown = CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: true),
+        let keyUp = CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: false)
+    else { return false }
+
+    for event in [keyDown, keyUp] {
+        event.flags = chord.modifiers
+        event.setIntegerValueField(.eventSourceUserData, value: injectedEventMarker)
+    }
+    keyDown.post(tap: .cgSessionEventTap)
+    keyUp.post(tap: .cgSessionEventTap)
+    return true
+}
+
+@discardableResult
+private func postShortcutSequence(_ chords: [ParsedChord]) -> Bool {
+    guard let first = chords.first, postShortcut(first) else { return false }
+    for (index, chord) in chords.dropFirst().enumerated() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + (Double(index + 1) * 0.2)) {
+            postShortcut(chord)
+        }
+    }
+    return true
+}
+
+@discardableResult
+private func performAction(_ rule: ResolvedRule) -> Bool {
+    guard let actionName = rule.definition.action else { return false }
+    if actionName == "openApplication" {
+        guard let name = rule.definition.argument else { return false }
+        run("/usr/bin/open", ["-a", name])
+        return true
+    }
+
+    guard let action = macActions[actionName] else { return false }
     switch action {
     case .shortcut(let chord):
-        if let parsed = try? parseChord(chord) { postShortcut(parsed) }
+        guard let parsed = try? parseChord(chord) else { return false }
+        return postShortcut(parsed)
+    case .shortcutSequence(let chords):
+        let parsed = chords.compactMap { try? parseChord($0) }
+        guard parsed.count == chords.count else { return false }
+        return postShortcutSequence(parsed)
     case .openApplication(let name):
         run("/usr/bin/open", ["-a", name])
+        return true
     case .process(let executable, let arguments):
         run(executable, arguments)
+        return true
     }
 }
 
-private func executeRule(_ rule: ResolvedRule) {
+@discardableResult
+private func executeRule(_ rule: ResolvedRule) -> Bool {
+    let executed: Bool
     if let target = rule.target {
-        postShortcut(target)
+        executed = postShortcut(target)
     } else {
-        performAction(rule)
+        executed = performAction(rule)
     }
-    log("Shortcut \(rule.definition.from) executed")
+    if executed { log("Shortcut \(rule.definition.from) executed") }
+    return executed
+}
+
+private func transform(_ event: CGEvent, to chord: ParsedChord) -> Bool {
+    guard let keyCode = chord.keyCode else { return false }
+    event.setIntegerValueField(.keyboardEventKeycode, value: Int64(keyCode))
+    event.flags = chord.modifiers
+    event.setIntegerValueField(.eventSourceUserData, value: injectedEventMarker)
+    return true
 }
 
 private let eventCallback: CGEventTapCallBack = { _, type, event, _ in
     if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
-        if let eventTap { CGEvent.tapEnable(tap: eventTap, enable: true) }
+        if remappingPermissionAvailable() {
+            if let eventTap { CGEvent.tapEnable(tap: eventTap, enable: true) }
+        } else {
+            disableActiveRemapping()
+        }
         return Unmanaged.passUnretained(event)
     }
 
@@ -453,7 +508,7 @@ private let eventCallback: CGEventTapCallBack = { _, type, event, _ in
             let shouldExecute = !windowsKeyWasUsed
             windowsKeyIsDown = false
             windowsKeyWasUsed = false
-            if shouldExecute, let rule { executeRule(rule) }
+            if shouldExecute, let rule { _ = executeRule(rule) }
         }
         return Unmanaged.passUnretained(event)
     }
@@ -477,7 +532,9 @@ private let eventCallback: CGEventTapCallBack = { _, type, event, _ in
         }
     }
 
-    guard ubuntuShortcutsEnabled && activeRemappingAvailable else {
+    let permissionAvailable = remappingPermissionAvailable()
+    guard ubuntuShortcutsEnabled && activeRemappingAvailable && permissionAvailable else {
+        if activeRemappingAvailable && !permissionAvailable { disableActiveRemapping() }
         return Unmanaged.passUnretained(event)
     }
 
@@ -487,8 +544,16 @@ private let eventCallback: CGEventTapCallBack = { _, type, event, _ in
         return Unmanaged.passUnretained(event)
     }
 
-    if isKeyDown && !isRepeat { executeRule(rule) }
-    return nil
+    if let target = rule.target {
+        guard transform(event, to: target) else {
+            return Unmanaged.passUnretained(event)
+        }
+        if isKeyDown && !isRepeat { log("Shortcut \(rule.definition.from) executed") }
+        return Unmanaged.passUnretained(event)
+    }
+
+    if isKeyDown && !isRepeat { _ = executeRule(rule) }
+    return Unmanaged.passUnretained(event)
 }
 
 private func installEventTap() {
@@ -497,7 +562,7 @@ private func installEventTap() {
     }
     if let tap = eventTap { CFMachPortInvalidate(tap) }
 
-    activeRemappingAvailable = AXIsProcessTrusted()
+    activeRemappingAvailable = remappingPermissionAvailable()
     let options: CGEventTapOptions = activeRemappingAvailable ? .defaultTap : .listenOnly
     let types: [CGEventType] = [
         .keyDown, .keyUp, .flagsChanged, .leftMouseDown, .rightMouseDown, .otherMouseDown
@@ -542,7 +607,7 @@ private func runSelfTest() -> Int32 {
         let expectedSources: Set<String> = [
             "ctrl+a", "ctrl+c", "ctrl+v", "ctrl+x", "ctrl+z", "ctrl+shift+z",
             "ctrl+f", "ctrl+s", "ctrl+p", "ctrl+n", "ctrl+o", "ctrl+t", "ctrl+w",
-            "ctrl+l", "ctrl+delete", "alt+tab", "alt+shift+tab", "alt+f4", "alt+f2",
+            "ctrl+l", "ctrl+delete", "alt+f4", "alt+f2",
             "alt+left", "alt+right", "win", "win+e", "win+d", "win+l", "win+tab",
             "win+left", "win+right", "win+up", "win+down", "print_screen",
             "shift+print_screen", "alt+print_screen", "ctrl+print_screen",
@@ -559,8 +624,7 @@ private func runSelfTest() -> Int32 {
             "ctrl+f": "find", "ctrl+s": "save", "ctrl+p": "print",
             "ctrl+n": "new", "ctrl+o": "open", "ctrl+t": "newTab",
             "ctrl+w": "closeWindow", "ctrl+l": "focusLocation",
-            "ctrl+delete": "deleteNextWord", "alt+tab": "nextApplication",
-            "alt+shift+tab": "previousApplication", "alt+f4": "closeWindow",
+            "ctrl+delete": "deleteNextWord", "alt+f4": "closeWindow",
             "alt+f2": "spotlight", "alt+left": "back", "alt+right": "forward",
             "win": "spotlight", "win+e": "openFinder", "win+d": "showDesktop",
             "win+l": "lockScreen", "win+tab": "missionControl",
@@ -730,7 +794,7 @@ NSWorkspace.shared.notificationCenter.addObserver(
 }
 
 Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in
-    let trusted = AXIsProcessTrusted()
+    let trusted = remappingPermissionAvailable()
     if trusted != activeRemappingAvailable || (eventTap == nil && CGPreflightListenEventAccess()) {
         installEventTap()
     }

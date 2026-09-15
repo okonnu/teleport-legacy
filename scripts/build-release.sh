@@ -3,7 +3,7 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "$0")" && pwd)"
 repo_dir="$(cd "$script_dir/.." && pwd)"
-version="${1:-1.3.2}"
+version="${1:-1.3.6}"
 dist_dir="$repo_dir/dist"
 app_dir="$dist_dir/Teleport.app"
 contents_dir="$app_dir/Contents"
@@ -48,13 +48,21 @@ iconutil -c icns "$iconset_dir" -o "$resources_dir/Teleport.icns"
 
 cp "$repo_dir/packaging/Info.plist" "$contents_dir/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $version" "$contents_dir/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName Teleport $version" "$contents_dir/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleName Teleport $version" "$contents_dir/Info.plist"
 chmod 755 "$binary_dir/Teleport"
 codesign --force --deep --sign - --identifier com.okonnu.Teleport "$app_dir"
 
-archive="$dist_dir/Teleport-macOS.zip"
+archive="$dist_dir/Teleport-$version-macOS.zip"
+latest_archive="$dist_dir/Teleport-latest-macOS.zip"
+legacy_archive="$dist_dir/Teleport-macOS.zip"
 ditto -c -k --sequesterRsrc --keepParent "$app_dir" "$archive"
-(cd "$dist_dir" && shasum -a 256 "$(basename "$archive")" > "$(basename "$archive").sha256")
+cp "$archive" "$latest_archive"
+cp "$archive" "$legacy_archive"
+for artifact in "$archive" "$latest_archive" "$legacy_archive"; do
+    (cd "$dist_dir" && shasum -a 256 "$(basename "$artifact")" > "$(basename "$artifact").sha256")
+done
 
 codesign --verify --deep --strict --verbose=2 "$app_dir"
 lipo -info "$binary_dir/Teleport"
-echo "Built $archive"
+echo "Built $archive and latest aliases"

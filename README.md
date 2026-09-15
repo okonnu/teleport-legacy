@@ -19,6 +19,7 @@ Install BetterDisplay and Deskflow first:
 ```bash
 brew install --cask betterdisplay
 brew install deskflow
+brew install --cask ghostty
 ```
 
 Then install the latest Teleport release:
@@ -28,8 +29,9 @@ curl -fsSL https://raw.githubusercontent.com/okonnu/teleport/main/install.sh | z
 ```
 
 The installer downloads the universal macOS app to `~/Applications`, starts it
-at login, reveals it in Finder, and opens Input Monitoring. Add
-`Teleport.app` to Input Monitoring and turn it on.
+at login, reveals it in Finder, and opens Input Monitoring. Add the
+version-numbered `Teleport` app to Accessibility and Input Monitoring, then
+turn it on.
 
 The app is locally signed but not Apple-notarized. If you download the zip in a
 browser, right-click the app and choose Open the first time.
@@ -106,7 +108,7 @@ If an edit is invalid, Teleport keeps the last valid configuration and reports
 Command Line Tools for Xcode are required.
 
 ```bash
-./scripts/build-release.sh 1.3.2
+./scripts/build-release.sh 1.3.6
 ./dist/Teleport.app/Contents/MacOS/Teleport --self-test
 ```
 

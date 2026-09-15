@@ -2,11 +2,9 @@
 set -euo pipefail
 
 repo="okonnu/teleport"
-asset="Teleport-macOS.zip"
+asset="Teleport-latest-macOS.zip"
 download_url="https://github.com/$repo/releases/latest/download/$asset"
 install_dir="$HOME/Applications"
-app_path="$install_dir/Teleport.app"
-backup_path="$install_dir/Teleport.previous.app"
 agent_path="$HOME/Library/LaunchAgents/com.okonnu.teleport.plist"
 log_path="$HOME/Library/Logs/Teleport.log"
 service="com.okonnu.teleport"
@@ -29,6 +27,8 @@ if [[ ! -x "$source_app/Contents/MacOS/Teleport" ]]; then
     echo "The downloaded archive does not contain a valid app." >&2
     exit 1
 fi
+version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$source_app/Contents/Info.plist")"
+app_path="$install_dir/Teleport $version.app"
 
 mkdir -p "$install_dir" "$HOME/Library/LaunchAgents" "$HOME/Library/Logs"
 launchctl bootout "gui/$(id -u)/$service" 2>/dev/null || true
@@ -42,10 +42,9 @@ rm -rf \
     "$HOME/Library/Application Support/BetterDisplayHotkeys"
 rm -f "$HOME/Library/Logs/BetterDisplayHotkeys.log"
 
-rm -rf "$backup_path"
-if [[ -d "$app_path" ]]; then
-    mv "$app_path" "$backup_path"
-fi
+for existing_app in "$install_dir"/Teleport*.app(N); do
+    rm -rf "$existing_app"
+done
 ditto "$source_app" "$app_path"
 
 plutil -create xml1 "$agent_path"
@@ -63,6 +62,5 @@ open 'x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEven
 
 echo
 echo "Installed $app_path"
-echo "Add Teleport.app to Input Monitoring and enable it."
+echo "Add Teleport $version.app to Accessibility and Input Monitoring, then enable it."
 echo "Use the UK Off menu-bar item to enable Ubuntu shortcuts."
-echo "The previous Teleport app, when present, is kept at $backup_path"
